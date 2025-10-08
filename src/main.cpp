@@ -6,15 +6,15 @@
 #include "RTClib.h"
 #include <ArduinoJson.h>
 
-#define SD_MMC_CMD 15
-#define SD_MMC_CLK 14
-#define SD_MMC_D0 2
+#define SD_MMC_CMD 38
+#define SD_MMC_CLK 39
+#define SD_MMC_D0 40
 
 #define DHTPIN 48
 #define DHTTYPE DHT11
 #define SDAPIN 19
 #define SCLPIN 20
-#define SD_CS 10
+
 
 RTC_DS3231 rtc;
 DHT dht(DHTPIN, DHTTYPE);
@@ -24,27 +24,48 @@ char daysOfTheWeek[7][12] = {"Sunday", "Monday", "Tuesday", "Wednesday", "Thursd
 
 void setup() {
   // put your setup code here, to run once:
-  Serial.begin(9600);
+  Serial.begin(115200);
   dht.begin();
   Wire.begin(SDAPIN, SCLPIN);
   SD_MMC.setPins(SD_MMC_CLK, SD_MMC_CMD, SD_MMC_D0);
   if (!SD_MMC.begin("/sdcard", true, true, SDMMC_FREQ_DEFAULT, 5)) {
     Serial.println("Fejl: SD kort kunne ikke initialiseres!");
-    return;
+    while (1)
+    {
+      /* code */
+    }
+    
   }
   uint8_t cardType = SD_MMC.cardType();
   if (cardType == CARD_NONE){
     Serial.println("Ikke noget kort tilsluttet");
     return;
   }
+  uint64_t cardSize = SD_MMC.cardSize() / (1024 * 1024);
+  Serial.printf("SD_MMC Card Size: %lluMB\n", cardSize);
+
+   File root = SD_MMC.open("/Data");
+    if(!root){
+        Serial.println("Failed to open directory");
+        createDir(SD_MMC, "/Data");
+    }
+    if(!root.isDirectory()){
+        Serial.println("Not a directory");
+    }
+
+  File file = SD_MMC.open("/Data/telemetry.json", FILE_WRITE);
+  if (!file) {
+    Serial.println("Kunne ikke åbne fil til skrivning!");
+    writeFile(SD_MMC, "/Data/telemetry.json", "[");
+  }
+  listDir(SD_MMC, "/", 0);
  
-  
   Serial.println("SD kort klar.");
   if (!rtc.begin()) {
     Serial.println("Couldn't find RTC");
     Serial.flush();
-    while (1) delay(10);
   }
+  Serial.println("RTC klar");
 
   if (rtc.lostPower()) {
     Serial.println("RTC lost power, let's set the time!");
@@ -59,7 +80,7 @@ void setup() {
 
 void loop() {
   // Wait a few seconds between measurements.
-  delay(2000);
+  delay(5000);
   DateTime now = rtc.now();
   // Reading temperature or humidity takes about 250 milliseconds!
   // Sensor readings may also be up to 2 seconds 'old' (its a very slow sensor)
@@ -109,24 +130,30 @@ void loop() {
   doc["Humidity"] = h;
   
   Serial.println(formattedTime);
+ 
   
-  serializeJsonPretty(doc, Serial);
-
-  // Print the complete formatted time
-
-  // // Getting temperature
-  // Serial.print(rtc.getTemperature());
-  // Serial.println("ºC");
-
-  Serial.println();
-  File fil = SD_MMC.open("/data.json", FILE_WRITE);
-  if (!fil) {
+  File file = SD_MMC.open("/Data/telemetry.json", FILE_APPEND);
+  if (!file) {
     Serial.println("Kunne ikke åbne fil til skrivning!");
     return;
   }
+  //WriteLoggingStream loggedFile(file, Serial);
+  // char r = file.read();
+  // String fileInText;
+  // while(file.available())
+  //   fileInText += r;
 
-  // Skriv JSON til fil
-  serializeJson(doc, fil);
-  fil.close();
+  // Serial.println(fileInText);
+
+  serializeJsonPretty(doc, file);
+  file.close();
+  Serial.println();
+  serializeJsonPretty(doc, Serial);
+  
+
+  Serial.println();
+  
+  
+
 }
 
