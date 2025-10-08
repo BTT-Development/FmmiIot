@@ -2,6 +2,7 @@
 
 ### Esp32-s3 WROOM
 
+![Pinout](Esp32-Pinout.png)
 
 ### Libraries
 - [RTClib](https://docs.arduino.cc/libraries/rtclib/)
