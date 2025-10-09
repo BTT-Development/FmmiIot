@@ -1,11 +1,16 @@
 #include <Arduino.h>
+#include "arduino_secrets.h"
 #include <Wire.h>
 #include "DHT.h"
 #include "sd_read_write.h"
 #include <SD_MMC.h>
 #include "RTClib.h"
 #include <ArduinoJson.h>
+#include <WiFi.h>
+#include <Adafruit_GFX.h>
+#include <Adafruit_SSD1306.h>
 
+// SD-card pins
 #define SD_MMC_CMD 38
 #define SD_MMC_CLK 39
 #define SD_MMC_D0 40
@@ -15,6 +20,21 @@
 #define SDAPIN 19
 #define SCLPIN 20
 
+#define SCREEN_WIDTH 128 // OLED display width, in pixels
+#define SCREEN_HEIGHT 64 // OLED display height, in pixels
+#define OLED_RESET -1
+
+#define I2C_A_SDA 13 // GPIO8
+#define I2C_A_SCL 14 // GPIO9
+
+Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire1, OLED_RESET);
+
+
+const char *ssid_Router     =  SECRET_SSID; //Enter the router name
+const char *password_Router =  SECRET_PASS; //Enter the router password
+
+unsigned long previousMillis = 0;
+unsigned long interval = 30000;
 
 RTC_DS3231 rtc;
 DHT dht(DHTPIN, DHTTYPE);
@@ -25,6 +45,34 @@ char daysOfTheWeek[7][12] = {"Sunday", "Monday", "Tuesday", "Wednesday", "Thursd
 void setup() {
   // put your setup code here, to run once:
   Serial.begin(115200);
+  Wire1.begin(I2C_A_SDA, I2C_A_SCL);
+  if(!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) { 
+    Serial.println(F("SSD1306 allocation failed"));
+    for(;;); // Don't proceed, loop forever
+  }
+  display.clearDisplay();
+  display.setTextColor(WHITE); 
+  WiFi.begin(SECRET_SSID, SECRET_PASS);
+  display.setCursor(0,0);
+  display.println(F("Venter på WiFi"));
+  display.display();
+  Serial.println("Venter på WiFi.");
+  while(WiFi.status() != WL_CONNECTED)
+  {
+    Serial.print(" .");
+    display.print(" .");
+    display.display();
+    delay(500);
+  }
+  display.clearDisplay();
+  display.setCursor(0,0);
+  display.println("WiFi connected");
+  display.println("IP address: ");
+  display.println(WiFi.localIP());
+  display.display();
+  Serial.println("WiFi connected");
+  Serial.println("IP address: ");
+  Serial.println(WiFi.localIP());
   dht.begin();
   Wire.begin(SDAPIN, SCLPIN);
   SD_MMC.setPins(SD_MMC_CLK, SD_MMC_CMD, SD_MMC_D0);
@@ -44,26 +92,26 @@ void setup() {
   uint64_t cardSize = SD_MMC.cardSize() / (1024 * 1024);
   Serial.printf("SD_MMC Card Size: %lluMB\n", cardSize);
 
-   File root = SD_MMC.open("/Data");
+  File root = SD_MMC.open("/Data");
     if(!root){
-        Serial.println("Failed to open directory");
-        createDir(SD_MMC, "/Data");
+      Serial.println("Failed to open directory");
+      createDir(SD_MMC, "/Data");
     }
     if(!root.isDirectory()){
-        Serial.println("Not a directory");
+      Serial.println("Not a directory");
     }
-
-  File file = SD_MMC.open("/Data/telemetry.json", FILE_WRITE);
-  if (!file) {
+  root.close();
+  File josnFile = SD_MMC.open("/Data/telemetry.json", FILE_WRITE);
+  if (!josnFile) {
     Serial.println("Kunne ikke åbne fil til skrivning!");
     writeFile(SD_MMC, "/Data/telemetry.json", "[");
   }
+  josnFile.close();
   listDir(SD_MMC, "/", 0);
  
   Serial.println("SD kort klar.");
   if (!rtc.begin()) {
     Serial.println("Couldn't find RTC");
-    Serial.flush();
   }
   Serial.println("RTC klar");
 
@@ -79,20 +127,21 @@ void setup() {
 }
 
 void loop() {
-  // Wait a few seconds between measurements.
-  delay(5000);
-  DateTime now = rtc.now();
+  delay(5000); // Wait a few seconds between measurements.
+  display.clearDisplay();
+  display.setCursor(0,0);
+  DateTime now = rtc.now(); // Reading date and time.
   // Reading temperature or humidity takes about 250 milliseconds!
   // Sensor readings may also be up to 2 seconds 'old' (its a very slow sensor)
-  float h = dht.readHumidity();
-  // Read temperature as Celsius (the default)
-  float t = dht.readTemperature();
-  // Read temperature as Fahrenheit (isFahrenheit = true)
+  float h = dht.readHumidity(); // Read temperature as Celsius (the default)
+  float t = dht.readTemperature();// Read temperature as Fahrenheit (isFahrenheit = true)
   float f = dht.readTemperature(true);
 
   // Check if any reads failed and exit early (to try again).
   if (isnan(h) || isnan(t) || isnan(f)) {
     Serial.println(F("Failed to read from DHT sensor!"));
+    display.println("Failed to read from DHT sensor!");
+    display.display();
     return;
   }
 
@@ -100,7 +149,13 @@ void loop() {
   float hif = dht.computeHeatIndex(f, h);
   // Compute heat index in Celsius (isFahreheit = false)
   float hic = dht.computeHeatIndex(t, h, false);
-
+  display.print("Humidity: ");
+  display.print(h);
+  display.println("%");
+  display.print("Temperature: ");
+  display.print(t);
+  display.drawCircle(28, 2, 2, SSD1306_WHITE); 
+  
   Serial.print(F("Humidity: "));
   Serial.print(h);
   Serial.print(F("%  Temperature: "));
@@ -131,29 +186,30 @@ void loop() {
   
   Serial.println(formattedTime);
  
+ 
+  // if WiFi is down, try reconnecting every CHECK_WIFI_TIME seconds
+  if ((WiFi.status() != WL_CONNECTED)) {
   
-  File file = SD_MMC.open("/Data/telemetry.json", FILE_APPEND);
-  if (!file) {
-    Serial.println("Kunne ikke åbne fil til skrivning!");
+    Serial.println("Reconnecting to WiFi...");
+    display.print("Forbinder til WiFi...");
+    
+    WiFi.disconnect();
+    WiFi.reconnect();
+    File file = SD_MMC.open("/Data/telemetry.json", FILE_APPEND);
+    if (!file) {
+      Serial.println("Kunne ikke åbne fil til skrivning!");
+      file.close();
+      return;
+    }
+    serializeJsonPretty(doc, file);
+    file.close();
     return;
-  }
-  //WriteLoggingStream loggedFile(file, Serial);
-  // char r = file.read();
-  // String fileInText;
-  // while(file.available())
-  //   fileInText += r;
-
-  // Serial.println(fileInText);
-
-  serializeJsonPretty(doc, file);
-  file.close();
+  } 
+  display.print("Forbundet til Wifi");
+  display.display();
   Serial.println();
   serializeJsonPretty(doc, Serial);
   
-
   Serial.println();
-  
-  
-
 }
 
