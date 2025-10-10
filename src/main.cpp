@@ -9,6 +9,8 @@
 #include <WiFi.h>
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
+#include <PubSubClient.h>
+#include <WiFiClientSecure.h>
 
 // SD-card pins
 #define SD_MMC_CMD 38
@@ -36,11 +38,62 @@ const char *password_Router =  SECRET_PASS; //Enter the router password
 unsigned long previousMillis = 0;
 unsigned long interval = 30000;
 
+WiFiClientSecure espClient;
+
+PubSubClient mqttClient(espClient);
+
 RTC_DS3231 rtc;
 DHT dht(DHTPIN, DHTTYPE);
 JsonDocument doc;
 
 char daysOfTheWeek[7][12] = {"Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"};
+
+void callback(char *topic, byte *payload, unsigned int length) {
+    Serial.print("Message arrived in topic: ");
+    Serial.println(topic);
+    Serial.print("Message:");
+    for (int i = 0; i < length; i++) {
+        Serial.print((char) payload[i]);
+    }
+    Serial.println();
+    Serial.println("-----------------------");
+}
+
+void ConnectToWifi(){
+  int attempCount = 0;
+  WiFi.mode(WIFI_STA);
+  WiFi.begin(SECRET_SSID, SECRET_PASS);
+  display.clearDisplay();
+  display.setTextColor(WHITE); 
+  display.setCursor(0,0);
+  display.print(F("Venter på WiFi."));
+  display.display();
+  Serial.print("Venter på WiFi.");
+  while(WiFi.status() != WL_CONNECTED && attempCount < 10)
+  {
+    Serial.print(" .");
+    display.print(" .");
+    display.display();
+    delay(500);
+    attempCount++;
+  }
+  if(WiFi.status() == WL_CONNECTED){
+    display.clearDisplay();
+    display.setCursor(0,0);
+    display.println("WiFi connected");
+    display.println("IP address: ");
+    display.println(WiFi.localIP());
+    display.display();
+    Serial.println("WiFi connected");
+    Serial.print("IP address: ");
+    Serial.println(WiFi.localIP());
+  }
+  else{
+     display.clearDisplay();
+     display.print("Kunne ikke oprette forbindelse til WiFi");
+     display.display();
+  }
+}
 
 void setup() {
   // put your setup code here, to run once:
@@ -50,39 +103,34 @@ void setup() {
     Serial.println(F("SSD1306 allocation failed"));
     for(;;); // Don't proceed, loop forever
   }
-  display.clearDisplay();
-  display.setTextColor(WHITE); 
-  WiFi.begin(SECRET_SSID, SECRET_PASS);
-  display.setCursor(0,0);
-  display.println(F("Venter på WiFi"));
-  display.display();
-  Serial.println("Venter på WiFi.");
-  while(WiFi.status() != WL_CONNECTED)
-  {
-    Serial.print(" .");
-    display.print(" .");
-    display.display();
-    delay(500);
-  }
-  display.clearDisplay();
-  display.setCursor(0,0);
-  display.println("WiFi connected");
-  display.println("IP address: ");
-  display.println(WiFi.localIP());
-  display.display();
-  Serial.println("WiFi connected");
-  Serial.println("IP address: ");
-  Serial.println(WiFi.localIP());
+  
+  ConnectToWifi();
+ 
+  espClient.setCACert(ca_cert);
+
+  mqttClient.setServer(SECRET_MQTT_BROKER, SECRET_MQTT_PORT);
+  mqttClient.setKeepAlive(60);
+  mqttClient.setCallback(callback);
+
+
+      while (!mqttClient.connected()) {
+        String client_id = "fmmiEsp32-" + String(WiFi.macAddress());
+        Serial.printf("The client %s connects to the public MQTT broker\n", client_id.c_str());
+        if (mqttClient.connect(client_id.c_str(), SECRET_MQTT_USERNAME, SECRET_MQTT_PASSWORD)) {
+            Serial.println("Public EMQX MQTT broker connected");
+        } else {
+            Serial.print("failed with state ");
+            Serial.print(mqttClient.state());
+            delay(2000);
+        }
+    }
+
+
   dht.begin();
   Wire.begin(SDAPIN, SCLPIN);
   SD_MMC.setPins(SD_MMC_CLK, SD_MMC_CMD, SD_MMC_D0);
   if (!SD_MMC.begin("/sdcard", true, true, SDMMC_FREQ_DEFAULT, 5)) {
     Serial.println("Fejl: SD kort kunne ikke initialiseres!");
-    while (1)
-    {
-      /* code */
-    }
-    
   }
   uint8_t cardType = SD_MMC.cardType();
   if (cardType == CARD_NONE){
@@ -127,6 +175,7 @@ void setup() {
 }
 
 void loop() {
+  mqttClient.loop();
   delay(5000); // Wait a few seconds between measurements.
   display.clearDisplay();
   display.setCursor(0,0);
@@ -149,12 +198,13 @@ void loop() {
   float hif = dht.computeHeatIndex(f, h);
   // Compute heat index in Celsius (isFahreheit = false)
   float hic = dht.computeHeatIndex(t, h, false);
-  display.print("Humidity: ");
+  display.print("Humidity:      ");
   display.print(h);
   display.println("%");
-  display.print("Temperature: ");
+  display.print("Temperature:   ");
   display.print(t);
-  display.drawCircle(28, 2, 2, SSD1306_WHITE); 
+  display.drawCircle(122, 10, 2, WHITE);
+  display.println(); 
   
   Serial.print(F("Humidity: "));
   Serial.print(h);
@@ -185,16 +235,23 @@ void loop() {
   doc["Humidity"] = h;
   
   Serial.println(formattedTime);
- 
- 
+  uint8_t cardType = SD_MMC.cardType();
+  if (cardType == CARD_NONE){
+    display.println("Mangler SD kort");
+    
+  }
+  else{
+    display.println("SD kort tilsluttet");
+  }
   // if WiFi is down, try reconnecting every CHECK_WIFI_TIME seconds
   if ((WiFi.status() != WL_CONNECTED)) {
   
     Serial.println("Reconnecting to WiFi...");
-    display.print("Forbinder til WiFi...");
-    
+    display.println("Forbinder til WiFi...");
+    display.display();
     WiFi.disconnect();
     WiFi.reconnect();
+
     File file = SD_MMC.open("/Data/telemetry.json", FILE_APPEND);
     if (!file) {
       Serial.println("Kunne ikke åbne fil til skrivning!");
@@ -206,10 +263,11 @@ void loop() {
     return;
   } 
   display.print("Forbundet til Wifi");
+  
   display.display();
   Serial.println();
   serializeJsonPretty(doc, Serial);
-  
+  mqttClient.publish(SECRET_MQTT_TOPIC, "TEST");
   Serial.println();
 }
 
