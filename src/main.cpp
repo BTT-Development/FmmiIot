@@ -11,32 +11,34 @@
 #include <Adafruit_SSD1306.h>
 #include <PubSubClient.h>
 #include <WiFiClientSecure.h>
+#include <StreamUtils.h>
 
 // SD-card pins
 #define SD_MMC_CMD 38
 #define SD_MMC_CLK 39
-#define SD_MMC_D0 40
+#define SD_MMC_D0  40
 
 #define DHTPIN 48
 #define DHTTYPE DHT11
 #define SDAPIN 19
 #define SCLPIN 20
 
-#define SCREEN_WIDTH 128 // OLED display width, in pixels
+#define SCREEN_WIDTH  128 // OLED display width, in pixels
 #define SCREEN_HEIGHT 64 // OLED display height, in pixels
-#define OLED_RESET -1
+#define OLED_RESET    -1
 
 #define I2C_A_SDA 13 // GPIO8
 #define I2C_A_SCL 14 // GPIO9
 
+unsigned long lastIntervalSend = 0;
+unsigned long lastRealtimeSend = 0;
+unsigned long intervalDelay = 10000; 
+unsigned long realtimeDelay = 1000;  
+
+const char *pathTemperature = "/Data/temperature.json";
+const char *pathHumidity =    "/Data/humidity.json";
+
 Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire1, OLED_RESET);
-
-
-const char *ssid_Router     =  SECRET_SSID; //Enter the router name
-const char *password_Router =  SECRET_PASS; //Enter the router password
-
-unsigned long previousMillis = 0;
-unsigned long interval = 30000;
 
 WiFiClientSecure espClient;
 
@@ -44,19 +46,33 @@ PubSubClient mqttClient(espClient);
 
 RTC_DS3231 rtc;
 DHT dht(DHTPIN, DHTTYPE);
-JsonDocument doc;
+
+bool dhtError = false;
 
 char daysOfTheWeek[7][12] = {"Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"};
+
+JsonDocument docTemperature; 
+JsonDocument docHumidity;
 
 void callback(char *topic, byte *payload, unsigned int length) {
     Serial.print("Message arrived in topic: ");
     Serial.println(topic);
     Serial.print("Message:");
+    String msg;
     for (int i = 0; i < length; i++) {
         Serial.print((char) payload[i]);
+        msg += (char)payload[i];
     }
     Serial.println();
     Serial.println("-----------------------");
+    if (String(topic) == SECRET_MQTT_TIMEINTERVAL_TOPIC)
+    {
+      DynamicJsonDocument doc(128);
+      deserializeJson(doc, (char*) payload, length);
+      realtimeDelay = doc["RealTimeinterval"];
+      intervalDelay = doc["Timeinterval"];
+    }
+    
 }
 
 void ConnectToWifi(){
@@ -69,13 +85,14 @@ void ConnectToWifi(){
   display.print(F("Venter på WiFi."));
   display.display();
   Serial.print("Venter på WiFi.");
-  while(WiFi.status() != WL_CONNECTED && attempCount < 10)
+  while(WiFi.status() != WL_CONNECTED && attempCount < 5)
   {
     Serial.print(" .");
     display.print(" .");
     display.display();
     delay(500);
     attempCount++;
+    Serial.println("Reconnecting to WiFi...");
   }
   if(WiFi.status() == WL_CONNECTED){
     display.clearDisplay();
@@ -87,12 +104,89 @@ void ConnectToWifi(){
     Serial.println("WiFi connected");
     Serial.print("IP address: ");
     Serial.println(WiFi.localIP());
+    Serial.println(WiFi.status());
   }
   else{
      display.clearDisplay();
      display.print("Kunne ikke oprette forbindelse til WiFi");
      display.display();
+   
   }
+}
+
+void ReconnectToMqttBroker(){
+  int attempCount = 0;
+  while (!mqttClient.connected() && attempCount < 5) {
+    String client_id = "fmmiEsp32-" + String(WiFi.macAddress());
+    Serial.printf("The client %s connects to the public MQTT broker\n", client_id.c_str());
+    byte qos = 1;
+    bool retained = true;
+    if (mqttClient.connect(client_id.c_str(), SECRET_MQTT_USERNAME, SECRET_MQTT_PASSWORD, SECRET_MQTT_LASTWILL_TOPIC, qos, retained, SECRET_MQTT_LASTWILLMSG)) {
+        Serial.println("Public EMQX MQTT broker connected");
+        mqttClient.publish(SECRET_MQTT_LASTWILL_TOPIC, "Online", true);
+        mqttClient.subscribe(SECRET_MQTT_TIMEINTERVAL_TOPIC);
+        
+    } else {
+        Serial.print("failed with state ");
+        Serial.print(mqttClient.state());
+        attempCount++;
+        delay(500);
+    }
+  }
+}
+void PublishMqttJson(PubSubClient &client, const char *topic, JsonDocument &doc, bool retained){
+  size_t length = measureJson(doc);   
+  client.beginPublish(topic, length, retained);
+  BufferingPrint bufferedClient(client, 32);
+  serializeJson(doc, bufferedClient);
+  bufferedClient.flush();
+  if(mqttClient.endPublish()){
+    Serial.println("Data sendt");
+  }
+}
+void WriteToSdCard(const char *path, JsonDocument doc){
+  Serial.println("starter skrivning");
+   DynamicJsonDocument docArray(4096); 
+      File readFile = SD_MMC.open(path, FILE_READ);
+      if (readFile) {
+        DeserializationError error = deserializeJson(docArray, readFile);
+        readFile.close();
+        if (error) {
+          Serial.println("Fejl ved indlæsning af eksisterende JSON, starter nyt array.");
+          docArray.clear();
+          docArray.to<JsonArray>(); 
+        }
+      }
+      else{
+        docArray.to<JsonArray>(); 
+      }
+
+      docArray.add(doc);
+      File writeFile = SD_MMC.open(path, FILE_WRITE);
+      if (!writeFile) {
+        Serial.println("Kunne ikke åbne fil til skrivning!");
+        return;
+      }
+      serializeJsonPretty(docArray, writeFile);
+      writeFile.close();
+      Serial.println("Gemt på sd kort");
+      return;
+}
+
+void SendJsonArray(const char *path){
+   DynamicJsonDocument docArray(4096); 
+      File readFile = SD_MMC.open(path, FILE_READ);
+      if (readFile) 
+      {
+        DeserializationError error = deserializeJson(docArray, readFile);
+        if (!error)
+        {
+          PublishMqttJson(mqttClient, SECRET_MQTT_DATA_TEMPERATURE_TOPIC, docArray, false);
+          SD_MMC.remove(path);
+        }
+      }
+      Serial.println("json file sendt");
+      readFile.close();
 }
 
 void setup() {
@@ -105,26 +199,10 @@ void setup() {
   }
   
   ConnectToWifi();
- 
   espClient.setCACert(ca_cert);
-
   mqttClient.setServer(SECRET_MQTT_BROKER, SECRET_MQTT_PORT);
-  mqttClient.setKeepAlive(60);
   mqttClient.setCallback(callback);
-
-
-      while (!mqttClient.connected()) {
-        String client_id = "fmmiEsp32-" + String(WiFi.macAddress());
-        Serial.printf("The client %s connects to the public MQTT broker\n", client_id.c_str());
-        if (mqttClient.connect(client_id.c_str(), SECRET_MQTT_USERNAME, SECRET_MQTT_PASSWORD)) {
-            Serial.println("Public EMQX MQTT broker connected");
-        } else {
-            Serial.print("failed with state ");
-            Serial.print(mqttClient.state());
-            delay(2000);
-        }
-    }
-
+  ReconnectToMqttBroker();
 
   dht.begin();
   Wire.begin(SDAPIN, SCLPIN);
@@ -149,10 +227,10 @@ void setup() {
       Serial.println("Not a directory");
     }
   root.close();
-  File josnFile = SD_MMC.open("/Data/telemetry.json", FILE_WRITE);
+  File josnFile = SD_MMC.open("/Data/temperature.json", FILE_READ);
   if (!josnFile) {
-    Serial.println("Kunne ikke åbne fil til skrivning!");
-    writeFile(SD_MMC, "/Data/telemetry.json", "[");
+    Serial.println("Ingen json fil");
+    
   }
   josnFile.close();
   listDir(SD_MMC, "/", 0);
@@ -175,29 +253,52 @@ void setup() {
 }
 
 void loop() {
+  unsigned long miliesNow = millis();
+  if (WiFi.status() != WL_CONNECTED)
+  {
+    Serial.println("Reconnecting to WiFi...");
+    display.println("Forbinder til WiFi...");
+    display.display();
+    WiFi.disconnect();
+    WiFi.reconnect();
+  }
+  if (!mqttClient.connected())
+  {
+    ReconnectToMqttBroker();
+    if(mqttClient.connected())
+    {
+      SendJsonArray(pathTemperature);
+      SendJsonArray(pathHumidity);
+    }
+  }
+ 
+ 
   mqttClient.loop();
-  delay(5000); // Wait a few seconds between measurements.
-  display.clearDisplay();
+  
   display.setCursor(0,0);
   DateTime now = rtc.now(); // Reading date and time.
   // Reading temperature or humidity takes about 250 milliseconds!
   // Sensor readings may also be up to 2 seconds 'old' (its a very slow sensor)
   float h = dht.readHumidity(); // Read temperature as Celsius (the default)
   float t = dht.readTemperature();// Read temperature as Fahrenheit (isFahrenheit = true)
-  float f = dht.readTemperature(true);
+  
 
   // Check if any reads failed and exit early (to try again).
-  if (isnan(h) || isnan(t) || isnan(f)) {
+  if (isnan(h) || isnan(t)) {
     Serial.println(F("Failed to read from DHT sensor!"));
     display.println("Failed to read from DHT sensor!");
     display.display();
+    mqttClient.publish(SECRET_MQTT_ERROR_TOPIC, "Kan ikke læse DHT sensor", true);
+    dhtError = true;
     return;
   }
+  if (dhtError)
+  {
+    mqttClient.publish(SECRET_MQTT_ERROR_TOPIC, "", true);
+    dhtError = false;
+  }
+  
 
-  // Compute heat index in Fahrenheit (the default)
-  float hif = dht.computeHeatIndex(f, h);
-  // Compute heat index in Celsius (isFahreheit = false)
-  float hic = dht.computeHeatIndex(t, h, false);
   display.print("Humidity:      ");
   display.print(h);
   display.println("%");
@@ -206,18 +307,6 @@ void loop() {
   display.drawCircle(122, 10, 2, WHITE);
   display.println(); 
   
-  Serial.print(F("Humidity: "));
-  Serial.print(h);
-  Serial.print(F("%  Temperature: "));
-  Serial.print(t);
-  Serial.print(F("°C "));
-  Serial.print(f);
-  Serial.print(F("°F  Heat index: "));
-  Serial.print(hic);
-  Serial.print(F("°C "));
-  Serial.print(hif);
-  Serial.println(F("°F"));
-
   String yearStr = String(now.year(), DEC);
   String monthStr = (now.month() < 10 ? "0" : "") + String(now.month(), DEC);
   String dayStr = (now.day() < 10 ? "0" : "") + String(now.day(), DEC);
@@ -228,46 +317,53 @@ void loop() {
 
   String formattedTime = dayOfWeek + ", " + yearStr + "-" + monthStr + "-" + dayStr + " " + hourStr + ":" + minuteStr + ":" + secondStr;
 
-  doc["ID"] = 1;
-  doc["Sensor"] = "DHT11";
-  doc["Date"] = formattedTime;
-  doc["Temperature"] = t;
-  doc["Humidity"] = h;
-  
-  Serial.println(formattedTime);
-  uint8_t cardType = SD_MMC.cardType();
-  if (cardType == CARD_NONE){
-    display.println("Mangler SD kort");
-    
-  }
-  else{
-    display.println("SD kort tilsluttet");
-  }
-  // if WiFi is down, try reconnecting every CHECK_WIFI_TIME seconds
-  if ((WiFi.status() != WL_CONNECTED)) {
-  
-    Serial.println("Reconnecting to WiFi...");
-    display.println("Forbinder til WiFi...");
-    display.display();
-    WiFi.disconnect();
-    WiFi.reconnect();
+  docTemperature["DeviceID"] = docHumidity["DevicesID"] = 1;
+  docTemperature["Date"] =  docHumidity["Date"]  = formattedTime;
+  docTemperature["DataTypeID"] = 1;
+  docHumidity["DataTypeId"] = 2;
+  docTemperature["Value"] = t;
+  docHumidity["Value"] = h;
 
-    File file = SD_MMC.open("/Data/telemetry.json", FILE_APPEND);
-    if (!file) {
-      Serial.println("Kunne ikke åbne fil til skrivning!");
-      file.close();
-      return;
-    }
-    serializeJsonPretty(doc, file);
-    file.close();
-    return;
-  } 
-  display.print("Forbundet til Wifi");
+  if(miliesNow - lastRealtimeSend >= realtimeDelay){
+    lastRealtimeSend = miliesNow;
+    if (mqttClient.connected())
+    {
+      PublishMqttJson(mqttClient, SECRET_MQTT_REALTIME_TEMPERATURE_TOPIC, docTemperature, false);
   
-  display.display();
-  Serial.println();
-  serializeJsonPretty(doc, Serial);
-  mqttClient.publish(SECRET_MQTT_TOPIC, "TEST");
-  Serial.println();
+      PublishMqttJson(mqttClient, SECRET_MQTT_REALTIME_HUMIDITY_TOPIC, docHumidity, false);
+    }
+    
+    Serial.printf("Free heap: %d\n", ESP.getFreeHeap());
+  }
+  if (miliesNow - lastIntervalSend >= intervalDelay)
+  {
+    lastIntervalSend = miliesNow;
+    Serial.println(formattedTime);
+  
+    uint8_t cardType = SD_MMC.cardType();
+    if (cardType == CARD_NONE){
+      display.println("Mangler SD kort");
+    }
+    else{
+      display.println("SD kort tilsluttet");
+    }
+   
+    if (!mqttClient.connected()) {
+          Serial.println("start temp sd");
+      WriteToSdCard(pathTemperature, docTemperature);
+          Serial.println("start hum sd");
+      WriteToSdCard(pathHumidity, docHumidity);
+      return;
+    } 
+    display.print("Forbundet til Wifi");
+    
+    display.display();
+    Serial.println();
+    PublishMqttJson(mqttClient, SECRET_MQTT_DATA_TEMPERATURE_TOPIC, docTemperature, false);
+    PublishMqttJson(mqttClient, SECRET_MQTT_DATA_HUMIDITY_TOPIC, docHumidity, false);
+    Serial.println();
+   }
+   
 }
+
 

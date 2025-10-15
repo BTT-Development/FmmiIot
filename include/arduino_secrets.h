@@ -1,13 +1,18 @@
-#define SECRET_SSID "SibirienAP" //""
+#define SECRET_SSID "SibirienAP" //"NetworkOfDoom"
 #define SECRET_PASS "Siberia51244" //"12345678"
 
 const char *SECRET_MQTT_BROKER = "49987f455bc94d2183a5075a9fa78344.s1.eu.hivemq.cloud";
 const char *SECRET_MQTT_USERNAME = "fmmiEsp32";
 const char *SECRET_MQTT_PASSWORD = "Fizo9085";
 const int SECRET_MQTT_PORT = 8883;
-const char *SECRET_MQTT_LASTWILLMSG = "Ingen forbindelse";
-const char *SECRET_MQTT_TOPIC = "esp32/data";
-String SECRET_MQTT_LASTWILL_TOPIC = "esp/status";
+const char *SECRET_MQTT_LASTWILLMSG = "Offline";
+const char *SECRET_MQTT_DATA_TEMPERATURE_TOPIC = "device/esp32/data/temperature";
+const char *SECRET_MQTT_DATA_HUMIDITY_TOPIC = "device/esp32/data/humidity";
+const char *SECRET_MQTT_REALTIME_TEMPERATURE_TOPIC = "device/esp32/realtime/temperature";
+const char *SECRET_MQTT_REALTIME_HUMIDITY_TOPIC = "device/esp32/realtime/humidity";
+const char *SECRET_MQTT_LASTWILL_TOPIC = "device/esp32/status";
+const char *SECRET_MQTT_ERROR_TOPIC = "device/esp32/dht11/error";
+const char *SECRET_MQTT_TIMEINTERVAL_TOPIC = "device/esp32/settings/timeinterval";
 
 const char* ca_cert= R"EOF(
 -----BEGIN CERTIFICATE-----
