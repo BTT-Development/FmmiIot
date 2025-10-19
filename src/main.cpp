@@ -317,10 +317,10 @@ void loop() {
 
   String formattedTime = dayOfWeek + ", " + yearStr + "-" + monthStr + "-" + dayStr + " " + hourStr + ":" + minuteStr + ":" + secondStr;
 
-  docTemperature["DeviceID"] = docHumidity["DevicesID"] = 1;
+  docTemperature["DeviceID"] = docHumidity["DeviceID"] = 1;
   docTemperature["Date"] =  docHumidity["Date"]  = formattedTime;
   docTemperature["DataTypeID"] = 1;
-  docHumidity["DataTypeId"] = 2;
+  docHumidity["DataTypeID"] = 2;
   docTemperature["Value"] = t;
   docHumidity["Value"] = h;
 
