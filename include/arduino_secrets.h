@@ -5,14 +5,14 @@ const char *SECRET_MQTT_BROKER = "49987f455bc94d2183a5075a9fa78344.s1.eu.hivemq.
 const char *SECRET_MQTT_USERNAME = "fmmiEsp32";
 const char *SECRET_MQTT_PASSWORD = "Fizo9085";
 const int SECRET_MQTT_PORT = 8883;
-const char *SECRET_MQTT_LASTWILLMSG = "Offline";
+const char *SECRET_MQTT_LASTWILLMSG = "{AlarmId: 1, Date: 'Monday 2025-10-20 13:06:11', NewAlarm: true}";
 const char *SECRET_MQTT_DATA_TEMPERATURE_TOPIC = "device/esp32/data/temperature";
 const char *SECRET_MQTT_DATA_HUMIDITY_TOPIC = "device/esp32/data/humidity";
 const char *SECRET_MQTT_REALTIME_TEMPERATURE_TOPIC = "device/esp32/realtime/temperature";
 const char *SECRET_MQTT_REALTIME_HUMIDITY_TOPIC = "device/esp32/realtime/humidity";
-const char *SECRET_MQTT_LASTWILL_TOPIC = "device/esp32/status";
-const char *SECRET_MQTT_ERROR_TOPIC = "device/esp32/dht11/error";
-const char *SECRET_MQTT_TIMEINTERVAL_TOPIC = "device/esp32/settings/timeinterval";
+const char *SECRET_MQTT_LASTWILL_TOPIC = "device/esp32/alarm/status";
+const char *SECRET_MQTT_ERROR_TOPIC = "device/esp32/alarm/dht11";
+const char *SECRET_MQTT_SETTINGS_TOPIC = "device/esp32/settings";
 
 const char* ca_cert= R"EOF(
 -----BEGIN CERTIFICATE-----

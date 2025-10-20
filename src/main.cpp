@@ -18,8 +18,9 @@
 #define SD_MMC_CLK 39
 #define SD_MMC_D0  40
 
-#define DHTPIN 48
 #define DHTTYPE DHT11
+#define DHTPIN 48
+
 #define SDAPIN 19
 #define SCLPIN 20
 
@@ -38,6 +39,8 @@ unsigned long realtimeDelay = 1000;
 const char *pathTemperature = "/Data/temperature.json";
 const char *pathHumidity =    "/Data/humidity.json";
 
+uint deviceId; 
+
 Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire1, OLED_RESET);
 
 WiFiClientSecure espClient;
@@ -53,6 +56,11 @@ char daysOfTheWeek[7][12] = {"Sunday", "Monday", "Tuesday", "Wednesday", "Thursd
 
 JsonDocument docTemperature; 
 JsonDocument docHumidity;
+JsonDocument docAlarmDht;
+JsonDocument docAlarmStatus;
+JsonDocument docLastWillMsg;
+
+String Date;
 
 void callback(char *topic, byte *payload, unsigned int length) {
     Serial.print("Message arrived in topic: ");
@@ -65,15 +73,18 @@ void callback(char *topic, byte *payload, unsigned int length) {
     }
     Serial.println();
     Serial.println("-----------------------");
-    if (String(topic) == SECRET_MQTT_TIMEINTERVAL_TOPIC)
+    if (String(topic) == SECRET_MQTT_SETTINGS_TOPIC)
     {
       DynamicJsonDocument doc(128);
       deserializeJson(doc, (char*) payload, length);
+      deviceId = doc["DeviceId"];
       realtimeDelay = doc["RealTimeinterval"];
       intervalDelay = doc["Timeinterval"];
     }
     
 }
+
+
 
 void ConnectToWifi(){
   int attempCount = 0;
@@ -110,30 +121,25 @@ void ConnectToWifi(){
      display.clearDisplay();
      display.print("Kunne ikke oprette forbindelse til WiFi");
      display.display();
-   
   }
 }
 
-void ReconnectToMqttBroker(){
-  int attempCount = 0;
-  while (!mqttClient.connected() && attempCount < 5) {
-    String client_id = "fmmiEsp32-" + String(WiFi.macAddress());
-    Serial.printf("The client %s connects to the public MQTT broker\n", client_id.c_str());
-    byte qos = 1;
-    bool retained = true;
-    if (mqttClient.connect(client_id.c_str(), SECRET_MQTT_USERNAME, SECRET_MQTT_PASSWORD, SECRET_MQTT_LASTWILL_TOPIC, qos, retained, SECRET_MQTT_LASTWILLMSG)) {
-        Serial.println("Public EMQX MQTT broker connected");
-        mqttClient.publish(SECRET_MQTT_LASTWILL_TOPIC, "Online", true);
-        mqttClient.subscribe(SECRET_MQTT_TIMEINTERVAL_TOPIC);
-        
-    } else {
-        Serial.print("failed with state ");
-        Serial.print(mqttClient.state());
-        attempCount++;
-        delay(500);
-    }
-  }
+void GetTime(){
+   DateTime now = rtc.now(); // Reading date and time.
+  // Reading temperature or humidity takes about 250 milliseconds!
+  // Sensor readings may also be up to 2 seconds 'old' (its a very slow sensor)
+
+  String yearStr = String(now.year(), DEC);
+  String monthStr = (now.month() < 10 ? "0" : "") + String(now.month(), DEC);
+  String dayStr = (now.day() < 10 ? "0" : "") + String(now.day(), DEC);
+  String hourStr = (now.hour() < 10 ? "0" : "") + String(now.hour(), DEC); 
+  String minuteStr = (now.minute() < 10 ? "0" : "") + String(now.minute(), DEC);
+  String secondStr = (now.second() < 10 ? "0" : "") + String(now.second(), DEC);
+  String dayOfWeek = daysOfTheWeek[now.dayOfTheWeek()];
+
+  Date = dayOfWeek + ", " + yearStr + "-" + monthStr + "-" + dayStr + " " + hourStr + ":" + minuteStr + ":" + secondStr;
 }
+
 void PublishMqttJson(PubSubClient &client, const char *topic, JsonDocument &doc, bool retained){
   size_t length = measureJson(doc);   
   client.beginPublish(topic, length, retained);
@@ -144,6 +150,40 @@ void PublishMqttJson(PubSubClient &client, const char *topic, JsonDocument &doc,
     Serial.println("Data sendt");
   }
 }
+
+void ReconnectToMqttBroker(){
+  int attempCount = 0;
+  GetTime();
+  String jsonString;
+  docLastWillMsg["AlarmId"] = 1;
+  docLastWillMsg["Date"] = Date;
+  docLastWillMsg["NewAlarm"] = true;
+  serializeJson(docLastWillMsg, jsonString);
+  while (!mqttClient.connected() && attempCount < 5) {
+    String client_id = "fmmiEsp32-" + String(WiFi.macAddress());
+    Serial.printf("The client %s connects to the public MQTT broker\n", client_id.c_str());
+    byte qos = 1;
+    bool retained = true;
+    if (mqttClient.connect(client_id.c_str(), SECRET_MQTT_USERNAME, SECRET_MQTT_PASSWORD, SECRET_MQTT_LASTWILL_TOPIC, qos, retained, jsonString.c_str())) {
+        Serial.println("Public EMQX MQTT broker connected");
+        GetTime();
+        docAlarmStatus["AlarmId"] = 1;
+        docAlarmStatus["Date"] = Date;
+        docAlarmStatus["NewAlarm"] = false;
+        PublishMqttJson(mqttClient, SECRET_MQTT_LASTWILL_TOPIC, docAlarmStatus, true);
+        mqttClient.subscribe(SECRET_MQTT_SETTINGS_TOPIC);
+        
+    } else {
+        Serial.print("failed with state ");
+        Serial.print(mqttClient.state());
+        attempCount++;
+        delay(500);
+    }
+  }
+}
+
+
+
 void WriteToSdCard(const char *path, JsonDocument doc){
   Serial.println("starter skrivning");
    DynamicJsonDocument docArray(4096); 
@@ -189,6 +229,7 @@ void SendJsonArray(const char *path){
       readFile.close();
 }
 
+
 void setup() {
   // put your setup code here, to run once:
   Serial.begin(115200);
@@ -198,14 +239,22 @@ void setup() {
     for(;;); // Don't proceed, loop forever
   }
   
-  ConnectToWifi();
-  espClient.setCACert(ca_cert);
-  mqttClient.setServer(SECRET_MQTT_BROKER, SECRET_MQTT_PORT);
-  mqttClient.setCallback(callback);
-  ReconnectToMqttBroker();
-
-  dht.begin();
   Wire.begin(SDAPIN, SCLPIN);
+  if (!rtc.begin()) {
+    Serial.println("Couldn't find RTC");
+  }
+  Serial.println("RTC klar");
+
+  if (rtc.lostPower()) {
+    Serial.println("RTC lost power, let's set the time!");
+    // When time needs to be set on a new device, or after a power loss, the
+    // following line sets the RTC to the date & time this sketch was compiled
+    rtc.adjust(DateTime(F(__DATE__), F(__TIME__)));
+    // This line sets the RTC with an explicit date & time, for example to set
+    // January 21, 2014 at 3am you would call:
+    //rtc.adjust(DateTime(2014, 1, 21, 3, 0, 0));
+  }
+  
   SD_MMC.setPins(SD_MMC_CLK, SD_MMC_CMD, SD_MMC_D0);
   if (!SD_MMC.begin("/sdcard", true, true, SDMMC_FREQ_DEFAULT, 5)) {
     Serial.println("Fejl: SD kort kunne ikke initialiseres!");
@@ -227,32 +276,23 @@ void setup() {
       Serial.println("Not a directory");
     }
   root.close();
-  File josnFile = SD_MMC.open("/Data/temperature.json", FILE_READ);
-  if (!josnFile) {
-    Serial.println("Ingen json fil");
-    
-  }
-  josnFile.close();
+
   listDir(SD_MMC, "/", 0);
  
   Serial.println("SD kort klar.");
-  if (!rtc.begin()) {
-    Serial.println("Couldn't find RTC");
-  }
-  Serial.println("RTC klar");
+  dht.begin();
+  ConnectToWifi();
+  espClient.setCACert(ca_cert);
+  mqttClient.setServer(SECRET_MQTT_BROKER, SECRET_MQTT_PORT);
+  mqttClient.setCallback(callback);
+  ReconnectToMqttBroker();
 
-  if (rtc.lostPower()) {
-    Serial.println("RTC lost power, let's set the time!");
-    // When time needs to be set on a new device, or after a power loss, the
-    // following line sets the RTC to the date & time this sketch was compiled
-    rtc.adjust(DateTime(F(__DATE__), F(__TIME__)));
-    // This line sets the RTC with an explicit date & time, for example to set
-    // January 21, 2014 at 3am you would call:
-    //rtc.adjust(DateTime(2014, 1, 21, 3, 0, 0));
-  }
+
+
 }
 
 void loop() {
+  delay(3000);
   unsigned long miliesNow = millis();
   if (WiFi.status() != WL_CONNECTED)
   {
@@ -271,34 +311,35 @@ void loop() {
       SendJsonArray(pathHumidity);
     }
   }
- 
- 
   mqttClient.loop();
-  
+  display.clearDisplay();
   display.setCursor(0,0);
-  DateTime now = rtc.now(); // Reading date and time.
-  // Reading temperature or humidity takes about 250 milliseconds!
-  // Sensor readings may also be up to 2 seconds 'old' (its a very slow sensor)
   float h = dht.readHumidity(); // Read temperature as Celsius (the default)
   float t = dht.readTemperature();// Read temperature as Fahrenheit (isFahrenheit = true)
-  
-
+  GetTime();
   // Check if any reads failed and exit early (to try again).
   if (isnan(h) || isnan(t)) {
     Serial.println(F("Failed to read from DHT sensor!"));
     display.println("Failed to read from DHT sensor!");
     display.display();
-    mqttClient.publish(SECRET_MQTT_ERROR_TOPIC, "Kan ikke læse DHT sensor", true);
+    docAlarmDht["AlarmId"] = 2;
+    docAlarmDht["Date"] = Date;
+    docAlarmDht["NewAlarm"] = true;
+
+    PublishMqttJson(mqttClient, SECRET_MQTT_ERROR_TOPIC, docAlarmDht, true);
+  
     dhtError = true;
     return;
   }
   if (dhtError)
   {
-    mqttClient.publish(SECRET_MQTT_ERROR_TOPIC, "", true);
+    docAlarmDht["AlarmId"] = 2;
+    docAlarmDht["Date"] = Date;
+    docAlarmDht["NewAlarm"] = false;
+    PublishMqttJson(mqttClient, SECRET_MQTT_ERROR_TOPIC, docAlarmDht, true);
     dhtError = false;
   }
   
-
   display.print("Humidity:      ");
   display.print(h);
   display.println("%");
@@ -306,19 +347,9 @@ void loop() {
   display.print(t);
   display.drawCircle(122, 10, 2, WHITE);
   display.println(); 
-  
-  String yearStr = String(now.year(), DEC);
-  String monthStr = (now.month() < 10 ? "0" : "") + String(now.month(), DEC);
-  String dayStr = (now.day() < 10 ? "0" : "") + String(now.day(), DEC);
-  String hourStr = (now.hour() < 10 ? "0" : "") + String(now.hour(), DEC); 
-  String minuteStr = (now.minute() < 10 ? "0" : "") + String(now.minute(), DEC);
-  String secondStr = (now.second() < 10 ? "0" : "") + String(now.second(), DEC);
-  String dayOfWeek = daysOfTheWeek[now.dayOfTheWeek()];
 
-  String formattedTime = dayOfWeek + ", " + yearStr + "-" + monthStr + "-" + dayStr + " " + hourStr + ":" + minuteStr + ":" + secondStr;
-
-  docTemperature["DeviceID"] = docHumidity["DeviceID"] = 1;
-  docTemperature["Date"] =  docHumidity["Date"]  = formattedTime;
+  docTemperature["DeviceID"] = docHumidity["DeviceID"] = deviceId;
+  docTemperature["Date"] = docHumidity["Date"] = Date;
   docTemperature["DataTypeID"] = 1;
   docHumidity["DataTypeID"] = 2;
   docTemperature["Value"] = t;
@@ -331,14 +362,12 @@ void loop() {
       PublishMqttJson(mqttClient, SECRET_MQTT_REALTIME_TEMPERATURE_TOPIC, docTemperature, false);
   
       PublishMqttJson(mqttClient, SECRET_MQTT_REALTIME_HUMIDITY_TOPIC, docHumidity, false);
-    }
-    
-    Serial.printf("Free heap: %d\n", ESP.getFreeHeap());
+    }    
   }
   if (miliesNow - lastIntervalSend >= intervalDelay)
   {
     lastIntervalSend = miliesNow;
-    Serial.println(formattedTime);
+    Serial.println(Date);
   
     uint8_t cardType = SD_MMC.cardType();
     if (cardType == CARD_NONE){
@@ -349,19 +378,18 @@ void loop() {
     }
    
     if (!mqttClient.connected()) {
-          Serial.println("start temp sd");
+      Serial.println("start temp sd");
       WriteToSdCard(pathTemperature, docTemperature);
-          Serial.println("start hum sd");
+      Serial.println("start hum sd");
       WriteToSdCard(pathHumidity, docHumidity);
       return;
     } 
     display.print("Forbundet til Wifi");
-    
-    display.display();
     Serial.println();
+    
     PublishMqttJson(mqttClient, SECRET_MQTT_DATA_TEMPERATURE_TOPIC, docTemperature, false);
     PublishMqttJson(mqttClient, SECRET_MQTT_DATA_HUMIDITY_TOPIC, docHumidity, false);
-    Serial.println();
+    display.display();
    }
    
 }

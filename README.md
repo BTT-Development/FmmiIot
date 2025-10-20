@@ -15,21 +15,21 @@ This device can read temperature and humidity. It is connected to the internet v
 
 - VVC to VVC 3.3V
 - GND to GND
-- Signal to pin
+- Signal to pin 48
 
 #### [OLED DISPLAY](https://ardustore.dk/produkt/display-oled-0-96%E2%80%B3-i2c-128x64-module-hvid?gad_source=1&gad_campaignid=21613294775&gbraid=0AAAAAo4di3JYrA-S0BUgA_rib8UlQD3NB&gclid=CjwKCAjwmNLHBhA4EiwA3ts3mfcl3Okdb2zN0NU21foVy_hMQcU66zsDLWxqz2SGFc3zjzoU9w5AORoCVtwQAvD_BwE)
 
 - VCC to 3.3V
 - GND to GND
-- SCK to pin 
-- SDA to pin 
+- SCK to pin 14
+- SDA to pin 13
 
 #### [rtc 3231](https://ardustore.dk/produkt/ds3231-rtc-clock-i2c-zs-042-module?gad_source=1&gad_campaignid=21613294775&gbraid=0AAAAAo4di3JYrA-S0BUgA_rib8UlQD3NB&gclid=CjwKCAjwmNLHBhA4EiwA3ts3mb1n_jBsjDmh0RIahdC-VWsoCltn_z-wOSIlWQVgUn9qTSlDL5ZS9xoCCUYQAvD_BwE)
 
 - VCC to 3.3V
 - GND to GND
-
-
+- SCL to pin 20
+- SDA to pin 19
 ### Libraries
 - [RTClib Version: 2.1.4](https://docs.arduino.cc/libraries/rtclib/)
 - [ArduinoJson Version: 7.4.2](https://arduinojson.org/)
